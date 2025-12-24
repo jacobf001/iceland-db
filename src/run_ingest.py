@@ -3,6 +3,9 @@ from src.load import db, upsert_competition, upsert_match
 from src.kssi_sources import competitions_index_url, competition_url
 from src.parse_kssi import extract_motnumer_links, parse_competition_name, parse_matches_from_comp_page
 
+print(">>> KSÍ INGEST VERSION 2 ACTIVE <<<")
+
+
 SEASON = 2025  # change as needed
 
 def main():

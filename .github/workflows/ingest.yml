@@ -10,13 +10,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      - name: List files
+        run: ls -la
+
       - name: Install deps
         run: pip install -r requirements.txt
+        
+      - name: Debug (no secrets)
+        run: |
+          echo "PGHOST=$PGHOST"
+          echo "PGPORT=$PGPORT"
+          echo "PGDATABASE=$PGDATABASE"
+          echo "PGUSER=$PGUSER"
+          echo "PGSSLMODE=$PGSSLMODE"
+          python -c "import os; print('Has PGPASSWORD:', bool(os.getenv('PGPASSWORD')))"
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: ${{ secrets.PGSSLMODE }}
+
 
       - name: Run ingest
         env:
