@@ -43,9 +43,7 @@ jobs:
         run: |
           echo "SHA:"
           git rev-parse HEAD
-          echo "ROOT FILES:"
-          ls -la
-          echo "SRC FILES:"
+          echo "SRC:"
           ls -la src
 
       - name: Run ingest
@@ -57,4 +55,5 @@ jobs:
           PGPASSWORD: ${{ secrets.PGPASSWORD }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
         run: python -u -m src.run_ingest
+
 
