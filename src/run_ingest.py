@@ -1,52 +1,43 @@
-import hashlib
-from dateutil import tz
+from src.fetch import get
 from src.load import db, upsert_competition, upsert_match
+from src.kssi_sources import competitions_index_url, competition_url
+from src.parse_kssi import extract_motnumer_links, parse_competition_name, parse_matches_from_comp_page
 
-def stable_match_id(motnumer: str, kickoff_iso: str, home: str, away: str) -> str:
-    raw = f"{motnumer}|{kickoff_iso}|{home.strip().lower()}|{away.strip().lower()}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+SEASON = 2025  # change as needed
 
 def main():
-    # TODO: replace these with real parsed results from KSÍ pages
-    competitions = [
-        {
-            "motnumer": "12345",
-            "season": 2025,
-            "gender": "M",
-            "tier": "5",
-            "name_raw": "5. deild karla - A riðill",
-            "group_label": "A",
-            "source_url": "https://example.com",
-        }
-    ]
+    index_url = competitions_index_url(SEASON)
+    index_html = get(index_url)
 
-    matches = [
-        {
-            "motnumer": "12345",
-            "kickoff_utc": "2025-06-01T19:15:00Z",
-            "home_team_raw": "Team A",
-            "away_team_raw": "Team B",
-            "venue_raw": "Some Stadium",
-            "status": "scheduled",
-            "ft_home": None,
-            "ft_away": None,
-            "source_url": "https://example.com/match/1",
-        }
-    ]
+    motnums = extract_motnumer_links(index_html)
+    if not motnums:
+        raise RuntimeError(f"No motnumer links found on index page: {index_url}")
+
+    # Start small to avoid hammering KSÍ on day 1:
+    motnums = motnums[:50]  # remove this cap once confirmed working
 
     with db() as conn:
         with conn.transaction():
-            for c in competitions:
-                upsert_competition(conn, c)
+            for mot in motnums:
+                url = competition_url(mot)
+                html = get(url)
 
-            for m in matches:
-                m["match_id"] = stable_match_id(
-                    m["motnumer"],
-                    m["kickoff_utc"] or "",
-                    m["home_team_raw"],
-                    m["away_team_raw"],
-                )
-                upsert_match(conn, m)
+                name_raw = parse_competition_name(html)
+
+                comp = {
+                    "motnumer": mot,
+                    "season": SEASON,
+                    "gender": None,
+                    "tier": None,
+                    "name_raw": name_raw,
+                    "group_label": None,
+                    "source_url": url,
+                }
+                upsert_competition(conn, comp)
+
+                matches = parse_matches_from_comp_page(html, mot, url)
+                for m in matches:
+                    upsert_match(conn, m)
 
 if __name__ == "__main__":
     main()
