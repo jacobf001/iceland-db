@@ -39,6 +39,14 @@ jobs:
           PGPASSWORD: ${{ secrets.PGPASSWORD }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
 
+      - name: Show revision and files
+        run: |
+          echo "SHA:"
+          git rev-parse HEAD
+          echo "ROOT FILES:"
+          ls -la
+          echo "SRC FILES:"
+          ls -la src
 
       - name: Run ingest
         env:
@@ -48,4 +56,5 @@ jobs:
           PGUSER: ${{ secrets.PGUSER }}
           PGPASSWORD: ${{ secrets.PGPASSWORD }}
           PGSSLMODE: ${{ secrets.PGSSLMODE }}
-        run: python -m src.run_ingest
+        run: python -u -m src.run_ingest
+
