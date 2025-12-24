@@ -9,7 +9,12 @@ def main():
     index_url = competitions_index_url(SEASON)
     index_html = get(index_url)
 
+    print("INDEX_URL:", index_url)
+    print("INDEX_HTML_LEN:", len(index_html))
+
     motnums = extract_motnumer_links(index_html)
+    print("MOTNUMS_FOUND:", len(motnums))
+    print("FIRST_10_MOTNUMS:", motnums[:10])
     if not motnums:
         raise RuntimeError(f"No motnumer links found on index page: {index_url}")
 
