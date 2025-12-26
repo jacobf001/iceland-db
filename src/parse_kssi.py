@@ -7,15 +7,21 @@ from datetime import timezone
 MOT_RE = re.compile(r"motnumer=(\d+)")
 MATCH_RE = re.compile(r"match/(\d+)")  # fallback if KSÍ uses match IDs in links
 
+SCORE_RE = re.compile(r"\b(\d+)\s*[-–]\s*(\d+)\b")
+TIME_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+DATE_RE = re.compile(r"\b\d{1,2}\.\s*\d{1,2}\.\s*\d{4}\b|\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b")
+# Iceland is UTC year-round; KSÍ sometimes includes tokens that dateutil doesn't know.
+TZINFOS = {
+    "BIRTU": timezone.utc,
+    "ELKEM": timezone.utc,
+    "AVIS": timezone.utc,
+}
+
 def stable_match_id(motnumer: str, kickoff_iso: str, home: str, away: str) -> str:
     raw = f"{motnumer}|{kickoff_iso}|{home.strip().lower()}|{away.strip().lower()}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 def extract_motnumer_links(html: str):
-    """
-    Extract all motnumer IDs from a page.
-    Works on pages that list competitions with links containing ?motnumer=XXXXX
-    """
     motnums = set()
     for m in MOT_RE.finditer(html):
         motnums.add(m.group(1))
@@ -35,21 +41,48 @@ def try_parse_kickoff(text: str):
     if not t:
         return None
     try:
-        dt = dtparser.parse(t, dayfirst=True, fuzzy=True)
+        dt = dtparser.parse(t, dayfirst=True, fuzzy=True, tzinfos=TZINFOS)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     except Exception:
         return None
 
-def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
-    """
-    Very tolerant parser:
-    - looks for table rows that contain two team-like cells and (optionally) a date/time cell and score.
-    This will not be perfect on day 1, but it will ingest *something* consistently.
-    """
-    soup = BeautifulSoup(html, "lxml")
+def _strip_score(text: str) -> str:
+    return SCORE_RE.sub("", (text or "")).strip()
 
+def _looks_like_datetime(text: str) -> bool:
+    t = (text or "")
+    return bool(TIME_RE.search(t) or DATE_RE.search(t))
+
+def _split_front_datetime(text: str):
+    """
+    If a cell starts with date/time and then venue/team stuff, split it.
+    Returns (kickoff_text_or_none, remainder_text).
+    """
+    t = (text or "").strip()
+    if not t:
+        return None, t
+
+    # If there's a HH:MM, assume everything up to and including it is kickoff-ish.
+    parts = t.split()
+    time_idx = None
+    for i, p in enumerate(parts):
+        if re.fullmatch(r"\d{1,2}:\d{2}", p):
+            time_idx = i
+            break
+
+    if time_idx is not None:
+        kickoff_chunk = " ".join(parts[: time_idx + 1]).strip()
+        remainder = " ".join(parts[time_idx + 1 :]).strip()
+        # Only accept if kickoff_chunk actually parses
+        if try_parse_kickoff(kickoff_chunk):
+            return kickoff_chunk, remainder
+
+    return None, t
+
+def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
+    soup = BeautifulSoup(html, "lxml")
     rows = soup.find_all("tr")
     matches = []
 
@@ -58,47 +91,82 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
         if len(tds) < 3:
             continue
 
-        # Heuristics: find home/away by looking for " - " separator or two adjacent team columns
         texts = [td.get_text(" ", strip=True) for td in tds]
         joined = " | ".join(texts)
 
-        # Skip obvious headers
-        if any(x.lower() in joined.lower() for x in ["lið", "úrslit", "dagset", "staður", "umferð"]):
+        # Skip header-ish rows
+        if any(x in joined.lower() for x in ["lið", "úrslit", "dagset", "staður", "umferð", "date", "time"]):
             continue
 
-        # Find a score like "2 - 1" or "2–1"
-        score = None
+        # Score
         ft_home = ft_away = None
-        mscore = re.search(r"(\d+)\s*[-–]\s*(\d+)", joined)
+        mscore = SCORE_RE.search(joined)
         if mscore:
             ft_home, ft_away = int(mscore.group(1)), int(mscore.group(2))
-            score = f"{ft_home}-{ft_away}"
 
-        # Try to find two team names: common pattern is "... Home ... Away ..."
-        # We'll grab the longest two non-date-ish strings.
-        candidates = [t for t in texts if t and not re.search(r"\d{1,2}[./-]\d{1,2}", t)]
-        candidates = [t for t in candidates if len(t) >= 2 and not re.fullmatch(r"\d+", t)]
-        candidates = sorted(set(candidates), key=len, reverse=True)
-
-        if len(candidates) < 2:
-            continue
-
-        home = candidates[0]
-        away = candidates[1]
-
-        # Try parse kickoff from any cell that looks date/time-ish
+        # Kickoff: try any cell that looks date/time-ish
         kickoff_utc = None
+        kickoff_text = None
         for t in texts:
-            if re.search(r"\d{1,2}[./-]\d{1,2}", t) or re.search(r"\d{1,2}:\d{2}", t):
-                kickoff_utc = try_parse_kickoff(t)
-                if kickoff_utc:
+            if _looks_like_datetime(t):
+                kt = try_parse_kickoff(t)
+                if kt:
+                    kickoff_utc = kt
+                    kickoff_text = t
                     break
 
-        status = "played" if score else "scheduled"
+        # Team candidate cells: avoid date/time cells; strip scores
+        teamish = []
+        for t in texts:
+            if not t:
+                continue
+            if _looks_like_datetime(t):
+                continue
+            cleaned = _strip_score(t)
+            if len(cleaned) < 2:
+                continue
+            if re.fullmatch(r"\d+", cleaned):
+                continue
+            teamish.append(cleaned)
+
+        # If still not enough, allow cells that might have embedded kickoff at the front
+        if len(teamish) < 2:
+            for t in texts:
+                if not t:
+                    continue
+                cleaned = _strip_score(t)
+                if len(cleaned) < 2:
+                    continue
+                teamish.append(cleaned)
+
+        if len(teamish) < 2:
+            continue
+
+        # Choose home/away as the first two distinct non-empty teamish strings
+        home = teamish[0].strip()
+        away = next((x.strip() for x in teamish[1:] if x.strip() and x.strip() != home), None)
+        if not away:
+            continue
+
+        # If home has embedded kickoff at the front, split it out
+        if not kickoff_utc:
+            ktxt, rem = _split_front_datetime(home)
+            if ktxt:
+                kickoff_utc = try_parse_kickoff(ktxt)
+                home = rem or home
+
+        # Same for away (rare)
+        if not kickoff_utc:
+            ktxt, rem = _split_front_datetime(away)
+            if ktxt:
+                kickoff_utc = try_parse_kickoff(ktxt)
+                away = rem or away
+
+        status = "played" if (ft_home is not None and ft_away is not None) else "scheduled"
 
         # Prefer match report URL if present
         a = tr.find("a", href=True)
-        match_url = None
+        match_url = source_url
         match_id = None
         if a:
             href = a["href"]
@@ -120,7 +188,7 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
             "status": status,
             "ft_home": ft_home,
             "ft_away": ft_away,
-            "source_url": match_url or source_url,
+            "source_url": match_url,
         })
 
     # De-dupe by match_id
