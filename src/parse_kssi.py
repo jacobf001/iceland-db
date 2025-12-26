@@ -27,10 +27,115 @@ def extract_motnumer_links(html: str):
         motnums.add(m.group(1))
     return sorted(motnums)
 
-def parse_competition_name(html: str) -> str:
+def parse_competition_name(html: str, motnumer: str) -> str:
     soup = BeautifulSoup(html, "lxml")
-    h1 = soup.find(["h1", "h2"])
-    return h1.get_text(strip=True) if h1 else "Unknown competition"
+
+    # Common generic titles we must ignore
+    BAD = {
+        "staða & úrslit",
+        "staða og úrslit",
+        "úrslit",
+        "staða",
+        "fixtures",
+        "results",
+    }
+
+    # Grab candidate strings from headings + strong-ish elements first
+    candidates = []
+
+    for tag in soup.find_all(["h1","h2","h3","h4","strong","a","div","span"]):
+        t = tag.get_text(" ", strip=True)
+        if not t:
+            continue
+        tl = t.lower()
+        if tl in BAD:
+            continue
+        # keep reasonable length candidates
+        if 5 <= len(t) <= 120:
+            candidates.append(t)
+
+    # Fallback: also include any page text chunks
+    if not candidates:
+        for t in soup.stripped_strings:
+            s = str(t).strip()
+            if 5 <= len(s) <= 120 and s.lower() not in BAD:
+                candidates.append(s)
+
+    # Score candidates: prefer strings that look like Icelandic competition names
+    def score(s: str) -> int:
+        sl = s.lower()
+        sc = 0
+
+        # strong signals
+        if "deild" in sl: sc += 50
+        if "karla" in sl: sc += 40
+        if "kvenna" in sl: sc += 40
+        if "riðill" in sl: sc += 35
+        if "bikar" in sl: sc += 25
+        if "mót" in sl: sc += 10
+
+        # tier patterns like "5. deild"
+        if re.search(r"\b\d+\.\s*deild\b", sl): sc += 60
+
+        # punish obviously not-a-title strings
+        if "https://" in sl or "www." in sl: sc -= 50
+        if "motnumer" in sl: sc -= 50
+        if "veldu" in sl: sc -= 20
+        if "smelltu" in sl: sc -= 20
+        if sl in BAD: sc -= 200
+
+        # small bonus if it contains Icelandic letters (often present in true names)
+        if any(ch in s for ch in "ðþæöíúóáéý"): sc += 5
+
+        return sc
+
+    # De-dupe while preserving order
+    seen = set()
+    uniq = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    # Pick best
+    best = None
+    best_score = -10**9
+    for c in uniq:
+        sc = score(c)
+        if sc > best_score:
+            best_score = sc
+            best = c
+
+    # If we still ended up with generic, return Unknown
+    if not best or best.lower() in BAD:
+        return "Unknown competition"
+
+    return best
+
+
+
+def infer_gender_tier(name_raw: str):
+    """
+    Infer gender + tier from the competition name.
+    - 'karla' => M
+    - 'kvenna' => W
+    - '<number>. deild ...' => tier number
+    """
+    n = (name_raw or "").lower()
+
+    gender = None
+    if "karla" in n:
+        gender = "M"
+    elif "kvenna" in n:
+        gender = "W"
+
+    tier = None
+    m = re.search(r"\b(\d+)\.\s*deild\b", n)
+    if m:
+        tier = int(m.group(1))
+
+    return gender, tier
+
 
 def try_parse_kickoff(text: str):
     """
