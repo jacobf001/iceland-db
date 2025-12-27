@@ -112,6 +112,51 @@ def parse_competition_name(html: str, motnumer: str) -> str:
 
     return best
 
+def parse_competitions_from_index(html: str, year: int):
+    """
+    Returns dict: motnumer -> {motnumer, season, name_raw, gender, tier, group_label, source_url}
+    Extracts names from the year index page where they appear in plain HTML.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    comps = {}
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        m = MOT_RE.search(href)
+        if not m:
+            continue
+
+        mot = m.group(1)
+        name = a.get_text(" ", strip=True)
+        if not name:
+            continue
+
+        # ignore generic navigation items
+        nl = name.lower()
+        if nl in {"staða & úrslit", "staða og úrslit"}:
+            continue
+
+        gender, tier = infer_gender_tier(name)
+
+        # group label e.g. "A riðill"
+        group_label = None
+        gm = re.search(r"\b([A-ZÁÐÉÍÓÚÝÞÆÖ])\s*riðill\b", name, flags=re.IGNORECASE)
+        if gm:
+            group_label = f"{gm.group(1).upper()} riðill"
+
+        url = href if href.startswith("http") else f"https://www.ksi.is{href}"
+
+        comps[mot] = {
+            "motnumer": mot,
+            "season": int(year),
+            "gender": gender,
+            "tier": tier,
+            "name_raw": name,
+            "group_label": group_label,
+            "source_url": url,
+        }
+
+    return comps
 
 
 def infer_gender_tier(name_raw: str):
@@ -135,6 +180,7 @@ def infer_gender_tier(name_raw: str):
         tier = int(m.group(1))
 
     return gender, tier
+
 
 
 def try_parse_kickoff(text: str):
