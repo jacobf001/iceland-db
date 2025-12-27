@@ -241,56 +241,89 @@ def _split_front_datetime(text: str):
 
     return None, t
 
+LEIKUR_RE = re.compile(r"[?&]leikur=(\d+)")
+WS_RE = re.compile(r"\s+")
+
+def _clean(s: str) -> str:
+    return WS_RE.sub(" ", (s or "")).strip()
+
 def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
     soup = BeautifulSoup(html, "lxml")
-    rows = soup.select("table tr")
     matches = []
 
-    for tr in rows:
-        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-        if len(tds) < 4:
+    # KSÍ match rows have: td[0]=date/time/venue, td[1]=ul.list.type2, td[2]=icons/links
+    for tr in soup.select("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 2:
             continue
 
-        kickoff_utc = None
-        kickoff_raw = tds[0]
-        home = tds[1]
-        score = tds[2]
-        away = tds[3]
-        venue = tds[4] if len(tds) > 4 else None
+        team_ul = tds[1].select_one("ul.list.type2")
+        if not team_ul:
+            continue  # not a match row
 
-        # Skip headers / junk rows
-        if not home or not away:
+        # --- match_id from leikur=... (preferred) ---
+        match_id = None
+        for a in tr.select('a[href*="leikur="]'):
+            m = LEIKUR_RE.search(a.get("href", ""))
+            if m:
+                match_id = m.group(1)
+                break
+
+        # --- kickoff + venue from td[0] ---
+        kickoff_raw = None
+        venue_raw = None
+
+        date_span = tds[0].select_one("span.date")
+        if date_span:
+            # Example text: "Mið. 7. 5. 2025 19:15"
+            kickoff_raw = _clean(date_span.get_text(" ", strip=True))
+            # Strip weekday tokens like "Mið." at the front if present
+            kickoff_raw = re.sub(r"^[A-Za-zÁÐÉÍÓÚÝÞÆÖáðéíóúýþæö]+\.\s*", "", kickoff_raw)
+
+        venue_a = tds[0].select_one("span.time a")
+        if venue_a:
+            venue_raw = _clean(venue_a.get_text(" ", strip=True))
+
+        kickoff_utc = try_parse_kickoff(kickoff_raw) if kickoff_raw else None
+
+        # --- teams + score from td[1] ---
+        lis = team_ul.find_all("li", recursive=False)
+        if len(lis) < 2:
             continue
 
-        kickoff_utc = try_parse_kickoff(kickoff_raw)
+        def parse_team(li):
+            name_a = li.find("a")
+            name = _clean(name_a.get_text(" ", strip=True)) if name_a else _clean(li.get_text(" ", strip=True))
+            num_div = li.select_one("div.num")
+            score = None
+            if num_div:
+                txt = _clean(num_div.get_text(" ", strip=True))
+                if txt.isdigit():
+                    score = int(txt)
+            return name, score
 
-        if kickoff_utc is None:
-        # sometimes kickoff is embedded in home cell
-            ktxt, rem = _split_front_datetime(home)
-            if ktxt:
-                kickoff_utc = try_parse_kickoff(ktxt)
-                home = rem or home
+        home_name, home_score = parse_team(lis[0])
+        away_name, away_score = parse_team(lis[1])
 
+        ft_home = home_score
+        ft_away = away_score
+        status = "played" if (ft_home is not None and ft_away is not None) else "scheduled"
 
-        ft_home = ft_away = None
-        status = "scheduled"
-        m = re.match(r"(\d+)\s*[-–]\s*(\d+)", score or "")
-        if m:
-            ft_home, ft_away = int(m.group(1)), int(m.group(2))
-            status = "played"
-
-        match_id = stable_match_id(motnumer, kickoff_utc or "", home, away)
+        # If we couldn't find leikur=..., fall back to stable hash id
+        if not match_id:
+            match_id = stable_match_id(motnumer, kickoff_utc or "", home_name, away_name)
 
         matches.append({
-            "match_id": match_id,
+            "match_id": str(match_id),
             "motnumer": motnumer,
             "kickoff_utc": kickoff_utc,
-            "home_team_raw": home,
-            "away_team_raw": away,
-            "venue_raw": venue,
+            "home_team_raw": home_name,
+            "away_team_raw": away_name,
+            "venue_raw": venue_raw,
             "status": status,
             "ft_home": ft_home,
             "ft_away": ft_away,
+            # keep the competition page as source_url for now
             "source_url": source_url,
         })
 
@@ -299,3 +332,4 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
     for m in matches:
         dedup[m["match_id"]] = m
     return list(dedup.values())
+
