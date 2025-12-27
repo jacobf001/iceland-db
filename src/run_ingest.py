@@ -2,7 +2,7 @@ print("RUN_INGEST STARTED")
 print(">>> KSÍ INGEST VERSION 3 (INDEX NAME MAP) ACTIVE <<<")
 
 from src.fetch import get
-from src.load import db, upsert_competition, upsert_match
+from src.load import db, upsert_competition, upsert_match, get_or_create_team
 from src.kssi_sources import competitions_index_url, competition_url
 from src.parse_kssi import (
     extract_motnumer_links,
@@ -36,7 +36,7 @@ def main():
         raise RuntimeError(f"No motnumer links found on index page: {index_url}")
 
     # Start small to avoid hammering KSÍ on day 1:
-    motnums = motnums[:50]  # remove this cap once confirmed working
+    # motnums = motnums[:50]  # remove this cap once confirmed working
 
     with db() as conn:
         with conn.transaction():
@@ -67,8 +67,11 @@ def main():
 
                 matches = parse_matches_from_comp_page(html, mot, url)
                 for m in matches:
-                    upsert_match(conn, m)
+                    # Resolve / create canonical teams
+                    m["home_team_id"] = get_or_create_team(conn, m["home_team_raw"])
+                    m["away_team_id"] = get_or_create_team(conn, m["away_team_raw"])
 
+                    upsert_match(conn, m)
 
 if __name__ == "__main__":
     main()
