@@ -46,6 +46,13 @@ jobs:
           echo "SRC:"
           ls -la src
 
+      - name: Show revision and run_ingest header
+        run: |
+          echo "SHA:"
+          git rev-parse HEAD
+          echo "run_ingest.py (first 40 lines):"
+          sed -n '1,40p' src/run_ingest.py
+
       - name: Run ingest
         env:
           PGHOST: ${{ secrets.PGHOST }}
