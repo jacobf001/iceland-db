@@ -82,9 +82,6 @@ def upsert_match(conn, m):
 
 
 def get_or_create_team(conn, name_canonical: str) -> int:
-    """
-    Insert team if it doesn't exist, return team_id.
-    """
     name = (name_canonical or "").strip()
     if not name:
         raise ValueError("name_canonical is empty")
@@ -92,16 +89,17 @@ def get_or_create_team(conn, name_canonical: str) -> int:
     row = conn.execute(
         """
         insert into teams (name_canonical)
-        values (%s)
+        values (%(name)s)
         on conflict (name_canonical) do update
           set name_canonical = excluded.name_canonical
         returning team_id
         """,
-        (name,),
+        {"name": name},
     ).fetchone()
 
-    # psycopg returns a tuple-like row
-    return row[0]
+    # because row_factory=dict_row
+    return int(row["team_id"])
+
 
 def upsert_team_alias(conn, alias: str, team_id: int) -> None:
     a = (alias or "").strip()
@@ -111,10 +109,11 @@ def upsert_team_alias(conn, alias: str, team_id: int) -> None:
     conn.execute(
         """
         insert into team_aliases (alias, team_id)
-        values (%s, %s)
+        values (%(alias)s, %(team_id)s)
         on conflict (alias) do update
           set team_id = excluded.team_id
         """,
-        (a, team_id),
+        {"alias": a, "team_id": int(team_id)},
     )
+
 
