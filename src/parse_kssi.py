@@ -112,6 +112,28 @@ def parse_competition_name(html: str, motnumer: str) -> str:
 
     return best
 
+def infer_gender_tier(name_raw: str):
+    """
+    Infer gender + tier from the competition name.
+    - 'karla' => M
+    - 'kvenna' => W
+    - '<number>. deild ...' => tier number
+    """
+    n = (name_raw or "").lower()
+
+    gender = None
+    if "karla" in n:
+        gender = "M"
+    elif "kvenna" in n:
+        gender = "W"
+
+    tier = None
+    m = re.search(r"\b(\d+)\.\s*deild\b", n)
+    if m:
+        tier = int(m.group(1))
+
+    return gender, tier
+
 def parse_competitions_from_index(html: str, year: int):
     """
     Returns dict: motnumer -> {motnumer, season, name_raw, gender, tier, group_label, source_url}
@@ -159,27 +181,7 @@ def parse_competitions_from_index(html: str, year: int):
     return comps
 
 
-def infer_gender_tier(name_raw: str):
-    """
-    Infer gender + tier from the competition name.
-    - 'karla' => M
-    - 'kvenna' => W
-    - '<number>. deild ...' => tier number
-    """
-    n = (name_raw or "").lower()
 
-    gender = None
-    if "karla" in n:
-        gender = "M"
-    elif "kvenna" in n:
-        gender = "W"
-
-    tier = None
-    m = re.search(r"\b(\d+)\.\s*deild\b", n)
-    if m:
-        tier = int(m.group(1))
-
-    return gender, tier
 
 
 
@@ -234,100 +236,42 @@ def _split_front_datetime(text: str):
 
 def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
     soup = BeautifulSoup(html, "lxml")
-    rows = soup.find_all("tr")
+    rows = soup.select("table tr")
     matches = []
 
     for tr in rows:
-        tds = tr.find_all("td")
-        if len(tds) < 3:
+        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+        if len(tds) < 4:
             continue
 
-        texts = [td.get_text(" ", strip=True) for td in tds]
-        joined = " | ".join(texts)
+        kickoff_raw = tds[0]
+        home = tds[1]
+        score = tds[2]
+        away = tds[3]
+        venue = tds[4] if len(tds) > 4 else None
 
-        # Skip header-ish rows
-        if any(x in joined.lower() for x in ["lið", "úrslit", "dagset", "staður", "umferð", "date", "time"]):
+        # Skip headers / junk rows
+        if not home or not away:
             continue
 
-        # Score
+        kickoff_utc = try_parse_kickoff(kickoff_raw)
+
+    if kickoff_utc is None:
+    # sometimes kickoff is embedded in home cell
+        ktxt, rem = _split_front_datetime(home)
+        if ktxt:
+            kickoff_utc = try_parse_kickoff(ktxt)
+            home = rem or home
+
+
         ft_home = ft_away = None
-        mscore = SCORE_RE.search(joined)
-        if mscore:
-            ft_home, ft_away = int(mscore.group(1)), int(mscore.group(2))
+        status = "scheduled"
+        m = re.match(r"(\d+)\s*[-–]\s*(\d+)", score or "")
+        if m:
+            ft_home, ft_away = int(m.group(1)), int(m.group(2))
+            status = "played"
 
-        # Kickoff: try any cell that looks date/time-ish
-        kickoff_utc = None
-        kickoff_text = None
-        for t in texts:
-            if _looks_like_datetime(t):
-                kt = try_parse_kickoff(t)
-                if kt:
-                    kickoff_utc = kt
-                    kickoff_text = t
-                    break
-
-        # Team candidate cells: avoid date/time cells; strip scores
-        teamish = []
-        for t in texts:
-            if not t:
-                continue
-            if _looks_like_datetime(t):
-                continue
-            cleaned = _strip_score(t)
-            if len(cleaned) < 2:
-                continue
-            if re.fullmatch(r"\d+", cleaned):
-                continue
-            teamish.append(cleaned)
-
-        # If still not enough, allow cells that might have embedded kickoff at the front
-        if len(teamish) < 2:
-            for t in texts:
-                if not t:
-                    continue
-                cleaned = _strip_score(t)
-                if len(cleaned) < 2:
-                    continue
-                teamish.append(cleaned)
-
-        if len(teamish) < 2:
-            continue
-
-        # Choose home/away as the first two distinct non-empty teamish strings
-        home = teamish[0].strip()
-        away = next((x.strip() for x in teamish[1:] if x.strip() and x.strip() != home), None)
-        if not away:
-            continue
-
-        # If home has embedded kickoff at the front, split it out
-        if not kickoff_utc:
-            ktxt, rem = _split_front_datetime(home)
-            if ktxt:
-                kickoff_utc = try_parse_kickoff(ktxt)
-                home = rem or home
-
-        # Same for away (rare)
-        if not kickoff_utc:
-            ktxt, rem = _split_front_datetime(away)
-            if ktxt:
-                kickoff_utc = try_parse_kickoff(ktxt)
-                away = rem or away
-
-        status = "played" if (ft_home is not None and ft_away is not None) else "scheduled"
-
-        # Prefer match report URL if present
-        a = tr.find("a", href=True)
-        match_url = source_url
-        match_id = None
-        if a:
-            href = a["href"]
-            match_url = href if href.startswith("http") else href
-            mid = MATCH_RE.search(href)
-            if mid:
-                match_id = mid.group(1)
-
-        if not match_id:
-            match_id = stable_match_id(motnumer, kickoff_utc or "", home, away)
+        match_id = stable_match_id(motnumer, kickoff_utc or "", home, away)
 
         matches.append({
             "match_id": match_id,
@@ -335,11 +279,11 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
             "kickoff_utc": kickoff_utc,
             "home_team_raw": home,
             "away_team_raw": away,
-            "venue_raw": None,
+            "venue_raw": venue,
             "status": status,
             "ft_home": ft_home,
             "ft_away": ft_away,
-            "source_url": match_url,
+            "source_url": source_url,
         })
 
     # De-dupe by match_id
