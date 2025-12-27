@@ -2,7 +2,7 @@ print("RUN_INGEST STARTED")
 print(">>> KSÍ INGEST VERSION 3 (INDEX NAME MAP) ACTIVE <<<")
 
 from src.fetch import get
-from src.load import db, upsert_competition, upsert_match, get_or_create_team
+from src.load import db, upsert_competition, upsert_match, get_or_create_team, upsert_team_alias
 from src.kssi_sources import competitions_index_url, competition_url
 from src.parse_kssi import (
     extract_motnumer_links,
@@ -67,11 +67,17 @@ def main():
 
                 matches = parse_matches_from_comp_page(html, mot, url)
                 for m in matches:
-                    # Resolve / create canonical teams
-                    m["home_team_id"] = get_or_create_team(conn, m["home_team_raw"])
-                    m["away_team_id"] = get_or_create_team(conn, m["away_team_raw"])
+                    home_id = get_or_create_team(conn, m["home_team_raw"])
+                    away_id = get_or_create_team(conn, m["away_team_raw"])
+
+                    upsert_team_alias(conn, m["home_team_raw"], home_id)
+                    upsert_team_alias(conn, m["away_team_raw"], away_id)
+
+                    m["home_team_id"] = home_id
+                    m["away_team_id"] = away_id
 
                     upsert_match(conn, m)
+
 
 if __name__ == "__main__":
     main()
