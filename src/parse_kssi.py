@@ -180,11 +180,6 @@ def parse_competitions_from_index(html: str, year: int):
 
     return comps
 
-
-
-
-
-
 def try_parse_kickoff(text: str):
     """
     Attempt to parse KSÍ-ish date strings.
@@ -244,6 +239,7 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
         if len(tds) < 4:
             continue
 
+        kickoff_utc = None
         kickoff_raw = tds[0]
         home = tds[1]
         score = tds[2]
@@ -256,12 +252,12 @@ def parse_matches_from_comp_page(html: str, motnumer: str, source_url: str):
 
         kickoff_utc = try_parse_kickoff(kickoff_raw)
 
-    if kickoff_utc is None:
-    # sometimes kickoff is embedded in home cell
-        ktxt, rem = _split_front_datetime(home)
-        if ktxt:
-            kickoff_utc = try_parse_kickoff(ktxt)
-            home = rem or home
+        if kickoff_utc is None:
+        # sometimes kickoff is embedded in home cell
+            ktxt, rem = _split_front_datetime(home)
+            if ktxt:
+                kickoff_utc = try_parse_kickoff(ktxt)
+                home = rem or home
 
 
         ft_home = ft_away = None
