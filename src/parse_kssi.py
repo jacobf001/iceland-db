@@ -112,22 +112,9 @@ def parse_competition_name(html: str, motnumer: str) -> str:
 
     return best
 
+import re
+
 def infer_gender_tier(name_raw: str):
-    """
-    Infer gender + tier from the competition name.
-
-    Gender:
-      - 'karla' => M
-      - 'kvenna' => W
-
-    Tier rules:
-      1) Explicit numeric tiers: '<number>. deild' => tier=<number>
-      2) Named tiers:
-         - 'besta deild' => 1
-         - 'lengjudeild' => 2
-         - '2. deild' etc already covered by (1)
-      3) Fallbacks for common Icelandic tier names (optional, tweak as needed)
-    """
     n = (name_raw or "").lower()
 
     # gender
@@ -137,25 +124,25 @@ def infer_gender_tier(name_raw: str):
     elif "karla" in n:
         gender = "M"
 
-    # 1) numeric tier like "4. deild"
-    m = re.search(r"\b(\d+)\.\s*deild\b", n)
-    if m:
-        return gender, int(m.group(1))
+    # competitions that should NOT get a tier
+    CUP_WORDS = [
+        "bikar", "bikarkeppni", "mjólkurbikar", "lengjubikar",
+        "úrslitaleikur", "evrópuleikir", "utandeild", "fótbolti.net bikarinn",
+        "meistarakeppni", "innanúss"
+    ]
+    if any(w in n for w in CUP_WORDS):
+        return gender, None
 
-    # 2) named top tiers
+    # tier 1 / 2 named leagues
     if "besta deild" in n:
         return gender, 1
-
-    # 2nd tier in Iceland is commonly "Lengjudeild"
     if "lengjudeild" in n:
         return gender, 2
 
-    # Optional: if you want these to map too (edit if you disagree)
-    # 3rd tier is often "2. deild" (already caught), but sometimes appears as "ykkösdeild" in other contexts
-    # Icelandic cups etc typically shouldn't get a tier
-    CUP_WORDS = ["bikar", "bikarkeppni", "mjólkurbikar", "utandeildarkeppni"]
-    if any(w in n for w in CUP_WORDS):
-        return gender, None
+    # numbered deilds are one tier BELOW the number (2.deild => tier 3, 3.deild => tier 4, etc)
+    m = re.search(r"\b(\d+)\.\s*deild\b", n)
+    if m:
+        return gender, int(m.group(1)) + 1
 
     return gender, None
 
