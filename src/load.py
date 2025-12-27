@@ -49,21 +49,26 @@ def upsert_competition(conn, c: dict):
     )
 
 
-def upsert_match(conn, m: dict):
+def upsert_match(conn, m):
     conn.execute(
         """
         insert into matches (
-          match_id, motnumer, kickoff_utc, home_team_raw, away_team_raw,
-          venue_raw, status, ft_home, ft_away, source_url, last_seen_at, updated_at
+          match_id, motnumer, kickoff_utc,
+          home_team_raw, away_team_raw,
+          home_team_id, away_team_id,
+          venue_raw, status, ft_home, ft_away, source_url
         ) values (
-          %(match_id)s, %(motnumer)s, %(kickoff_utc)s, %(home_team_raw)s, %(away_team_raw)s,
-          %(venue_raw)s, %(status)s, %(ft_home)s, %(ft_away)s, %(source_url)s, now(), now()
+          %(match_id)s, %(motnumer)s, %(kickoff_utc)s,
+          %(home_team_raw)s, %(away_team_raw)s,
+          %(home_team_id)s, %(away_team_id)s,
+          %(venue_raw)s, %(status)s, %(ft_home)s, %(ft_away)s, %(source_url)s
         )
         on conflict (match_id) do update set
-          motnumer = excluded.motnumer,
           kickoff_utc = excluded.kickoff_utc,
           home_team_raw = excluded.home_team_raw,
           away_team_raw = excluded.away_team_raw,
+          home_team_id = excluded.home_team_id,
+          away_team_id = excluded.away_team_id,
           venue_raw = excluded.venue_raw,
           status = excluded.status,
           ft_home = excluded.ft_home,
@@ -74,3 +79,42 @@ def upsert_match(conn, m: dict):
         """,
         m,
     )
+
+
+def get_or_create_team(conn, name_canonical: str) -> int:
+    """
+    Insert team if it doesn't exist, return team_id.
+    """
+    name = (name_canonical or "").strip()
+    if not name:
+        raise ValueError("name_canonical is empty")
+
+    row = conn.execute(
+        """
+        insert into teams (name_canonical)
+        values (%s)
+        on conflict (name_canonical) do update
+          set name_canonical = excluded.name_canonical
+        returning team_id
+        """,
+        (name,),
+    ).fetchone()
+
+    # psycopg returns a tuple-like row
+    return row[0]
+
+def upsert_team_alias(conn, alias: str, team_id: int) -> None:
+    a = (alias or "").strip()
+    if not a:
+        return
+
+    conn.execute(
+        """
+        insert into team_aliases (alias, team_id)
+        values (%s, %s)
+        on conflict (alias) do update
+          set team_id = excluded.team_id
+        """,
+        (a, team_id),
+    )
+
